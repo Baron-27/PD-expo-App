@@ -3,6 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import subprocess
 import socket
+import logging
 
 # Define directories
 UPLOAD_DIR = Path('C:/Users/Jemo/currentPyworks/uploads')
@@ -32,7 +33,7 @@ async def process_and_save_image(file_upload: UploadFile):
 
     # Run YOLOv5 segmentation
     print("Processing image with YOLOv5...")
-    subprocess.run([
+    subprocess.run([  # Run the YOLOv5 segmentation command
         "python", f"{YOLOV5_DIR}/segment/predict.py",
         "--imgsz", "640",
         "--hide-labels",
@@ -43,28 +44,50 @@ async def process_and_save_image(file_upload: UploadFile):
         "--project", str(OUTPUT_DIR),  # Change output directory to OUTPUT_DIR
     ])
 
-    # Locate the processed images in the YOLOv5 output folder (e.g., OUTPUT_DIR/exp/)
-    output_folder = OUTPUT_DIR / "exp"
-    processed_images = list(output_folder.rglob("*.jpg"))
+    # Locate the processed images in the YOLOv5 output folder (e.g., OUTPUT_DIR/exp*)
+    output_folder = list(OUTPUT_DIR.glob("exp*"))
 
     # Raise an error if no processed images are found
-    if not processed_images:
+    if not output_folder:
         raise HTTPException(status_code=500, detail="YOLOv5 segmentation failed to produce output.")
 
-    # Return the URL to the processed image
-    processed_image_url = f"/images/exp/{processed_images[0].name}"  # Return the image URL
-    return {"image_url": processed_image_url}
+    # Get the most recent processed image based on the timestamp
+    latest_exp_dir = max(output_folder, key=lambda d: d.stat().st_mtime)
+    processed_images = list(latest_exp_dir.glob("*.jpg"))
+
+    if not processed_images:
+        raise HTTPException(status_code=500, detail="No processed images found.")
+    latest_seg_image = max(processed_images, key=lambda f: f.stat().st_mtime)
+
+    return {"message": "Processing successful."}
 
 @app.get('/outputfile/')
 async def view_segmented_image():
-    files = list(OUTPUT_DIR.rglob("*.*"))
-    if not files:
-        raise HTTPException(status_code=404, detail="No files found in the output directory.")
-     # Get the latest file based on modification time
-    latest_file = max(files, key=lambda f: f.stat().st_mtime)
+    """
+    Serve the most recent processed image URL from the output directory.
+    """
+    print("Fetching the latest processed image...")
 
-    # Construct the file's URL
-    server_ip = socket.gethostbyname(socket.gethostname())
-    file_url = f"http://{server_ip}:8000/images/{latest_file.relative_to(OUTPUT_DIR).as_posix()}"
+    # Find all subdirectories in the output directory matching "exp*"
+    exp_dirs = list(OUTPUT_DIR.glob("exp*"))
+    if not exp_dirs:
+        raise HTTPException(status_code=404, detail="No output directories found.")
+
+    # Get the most recent "exp*" directory based on modification time
+    latest_exp_dir = max(exp_dirs, key=lambda d: d.stat().st_mtime)
+
+    # Find all image files in the latest directory
+    processed_images = list(latest_exp_dir.glob("*.jpg"))
+    if not processed_images:
+        raise HTTPException(status_code=404, detail="No processed images found in the latest directory.")
+
+    # Get the latest image based on modification time
+    latest_image = max(processed_images, key=lambda f: f.stat().st_mtime)
+
+    # Construct the URL to the latest processed image
+    
+    file_url = f"http://192.168.1.238:8000/images/{latest_exp_dir.name}/{latest_image.name}"
+
+    print("Constructed file URL:", file_url)
 
     return {"file": file_url}
